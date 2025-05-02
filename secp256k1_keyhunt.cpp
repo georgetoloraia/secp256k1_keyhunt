@@ -1,9 +1,10 @@
-// secp256k1_keyhunt.cpp with real libsecp256k1 integration
+// secp256k1_keyhunt.cpp with signed support for pr_values and infinite loop
 
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <set>
+#include <unordered_set>
 #include <random>
 #include <thread>
 #include <mutex>
@@ -19,8 +20,8 @@ extern "C" {
 #include <secp256k1_recovery.h>
 }
 
-std::vector<uint64_t> pr_values;
-std::set<uint64_t> target_x_coords;
+std::vector<int64_t> pr_values;
+std::unordered_set<std::string> target_x_coords;
 std::atomic<int> processed_count(0);
 std::mutex print_mutex;
 std::mutex file_mutex;
@@ -46,43 +47,49 @@ bool scalar_mult(uint8_t privkey[32], uint8_t pubkey[65]) {
     );
 }
 
-void log_found(uint64_t priv_key, uint64_t pub_x) {
+void log_found(uint64_t priv_key, const std::string& pub_x_hex) {
     std::lock_guard<std::mutex> lock(file_mutex);
     std::ofstream out("found_keys.txt", std::ios::app);
-    out << priv_key << "," << pub_x << "\n";
+    out << priv_key << "," << pub_x_hex << "\n";
     out.close();
 }
 
-void process_range(int thread_id, int start_idx, int end_idx) {
+void process_forever() {
     std::random_device rd;
     std::mt19937_64 gen(rd());
     std::uniform_int_distribution<uint64_t> dis(1, UINT64_MAX);
 
-    for (int i = start_idx; i < end_idx; ++i) {
-        uint64_t r = dis(gen);
-        uint64_t priv = r - pr_values[i];
+    while (true) {
+        for (int64_t i : pr_values) {
+            uint64_t r = dis(gen);
+            int64_t priv_signed = static_cast<int64_t>(r) - i;
+            if (priv_signed <= 0) continue;
+            uint64_t priv = static_cast<uint64_t>(priv_signed);
 
-        for (int offset = 0; offset < 4; ++offset) {
-            uint64_t k = priv + offset;
-            uint8_t priv_bytes[32], pub_bytes[65];
-            int_to_32bytes(k, priv_bytes);
-            if (scalar_mult(priv_bytes, pub_bytes)) {
-                uint64_t pub_x = 0;
-                for (int i = 1; i <= 8; ++i) {
-                    pub_x = (pub_x << 8) | pub_bytes[i];
+            for (int offset = 0; offset < 4; ++offset) {
+                uint64_t k = priv + offset;
+                uint8_t priv_bytes[32], pub_bytes[65];
+                int_to_32bytes(k, priv_bytes);
+                if (scalar_mult(priv_bytes, pub_bytes)) {
+                    std::string pub_x_hex;
+                    char buf[3];
+                    for (int j = 1; j <= 32; ++j) {
+                        snprintf(buf, sizeof(buf), "%02x", pub_bytes[j]);
+                        pub_x_hex += buf;
+                    }
+                    if (target_x_coords.count(pub_x_hex)) {
+                        std::lock_guard<std::mutex> lock(print_mutex);
+                        std::cout << "\n[FOUND] Key: " << k << " X: " << pub_x_hex << "\n";
+                        log_found(k, pub_x_hex);
+                    }
                 }
-                if (target_x_coords.count(pub_x)) {
+
+                int done = ++processed_count;
+                if (done % 100 == 0) {
                     std::lock_guard<std::mutex> lock(print_mutex);
-                    std::cout << "\n[FOUND] Key: " << k << " X: " << pub_x << "\n";
-                    log_found(k, pub_x);
+                    std::cout << "Processed " << done << "\r" << std::flush;
                 }
             }
-        }
-
-        int done = ++processed_count;
-        if (done % 10 == 0) {
-            std::lock_guard<std::mutex> lock(print_mutex);
-            std::cout << "Processed " << done << "/" << pr_values.size() << "\r" << std::flush;
         }
     }
 }
@@ -91,29 +98,23 @@ int main() {
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
 
     std::ifstream pr_file("minuses.txt");
-    uint64_t val;
+    int64_t val;
     while (pr_file >> val) pr_values.push_back(val);
 
     std::ifstream pub_file("uncompress.txt");
-    while (pub_file >> val) target_x_coords.insert(val);
+    std::string line;
+    while (std::getline(pub_file, line)) {
+        if (!line.empty()) target_x_coords.insert(line);
+    }
 
     int num_threads = std::thread::hardware_concurrency();
-    int chunk_size = pr_values.size() / num_threads;
-
     std::vector<std::thread> threads;
-    auto start = std::chrono::steady_clock::now();
 
     for (int t = 0; t < num_threads; ++t) {
-        int start_idx = t * chunk_size;
-        int end_idx = (t == num_threads - 1) ? pr_values.size() : start_idx + chunk_size;
-        threads.emplace_back(process_range, t, start_idx, end_idx);
+        threads.emplace_back(process_forever);
     }
 
     for (auto &th : threads) th.join();
-
-    auto end = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    std::cout << "\nCompleted in " << elapsed.count() << " seconds.\n";
 
     secp256k1_context_destroy(ctx);
     return 0;
