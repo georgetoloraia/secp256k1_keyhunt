@@ -4,7 +4,7 @@ For test and learn
 ## ✅ Step-by-step Integration Guide
 1. Install libsecp256k1
 On Ubuntu/Debian:
-```css
+```cpp
 sudo apt install autoconf libtool pkg-config git build-essential
 git clone https://github.com/bitcoin-core/secp256k1.git
 cd secp256k1
