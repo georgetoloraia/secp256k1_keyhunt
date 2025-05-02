@@ -3,3 +3,4 @@ venv
 .venv
 /venv
 secp256k1
+minuses.txt
