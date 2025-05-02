@@ -1,6 +1,20 @@
 # secp256k1_keyhunt
 For test and learn
 
+## ✅ Step-by-step Integration Guide
+1. Install libsecp256k1
+On Ubuntu/Debian:
+```bash
+sudo apt install autoconf libtool pkg-config git build-essential
+git clone https://github.com/bitcoin-core/secp256k1.git
+cd secp256k1
+./autogen.sh
+./configure --enable-module-ecmult --enable-module-recovery --enable-experimental
+make
+sudo make install
+```
+This installs the static library and headers.
+
 ## ✅ Compilation Instructions
 ```bash
 g++ secp256k1_keyhunt.cpp -o keyhunt -lsecp256k1 -pthread
