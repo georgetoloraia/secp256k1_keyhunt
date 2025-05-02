@@ -1,10 +1,9 @@
-// secp256k1_keyhunt.cpp with signed support for pr_values and infinite loop
+// secp256k1_keyhunt.cpp using GMP with r - pr[i] logic and full 256-bit key support
 
 #include <iostream>
 #include <fstream>
-#include <vector>
-#include <set>
 #include <unordered_set>
+#include <vector>
 #include <random>
 #include <thread>
 #include <mutex>
@@ -12,6 +11,7 @@
 #include <chrono>
 #include <iomanip>
 #include <cstring>
+#include <gmpxx.h>
 
 extern "C" {
 #include <secp256k1.h>
@@ -20,22 +20,23 @@ extern "C" {
 #include <secp256k1_recovery.h>
 }
 
-std::vector<int64_t> pr_values;
 std::unordered_set<std::string> target_x_coords;
+std::vector<mpz_class> pr_values;
 std::atomic<int> processed_count(0);
 std::mutex print_mutex;
 std::mutex file_mutex;
 
 secp256k1_context* ctx;
 
-// Convert uint64_t to 32-byte buffer
-void int_to_32bytes(uint64_t k, uint8_t out[32]) {
-    memset(out, 0, 32);
-    for (int i = 0; i < 8; ++i)
-        out[31 - i] = (k >> (8 * i)) & 0xFF;
+void mpz_to_32bytes(const mpz_class& k, uint8_t out[32]) {
+    std::string hex = k.get_str(16);
+    while (hex.length() < 64) hex = "0" + hex;
+    for (int i = 0; i < 32; ++i) {
+        std::string byte_str = hex.substr(i * 2, 2);
+        out[i] = static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
+    }
 }
 
-// Perform scalar multiplication using libsecp256k1
 bool scalar_mult(uint8_t privkey[32], uint8_t pubkey[65]) {
     secp256k1_pubkey pub;
     if (!secp256k1_ec_pubkey_create(ctx, &pub, privkey)) {
@@ -47,29 +48,34 @@ bool scalar_mult(uint8_t privkey[32], uint8_t pubkey[65]) {
     );
 }
 
-void log_found(uint64_t priv_key, const std::string& pub_x_hex) {
+void log_found(const mpz_class& priv_key, const std::string& pub_x_hex) {
     std::lock_guard<std::mutex> lock(file_mutex);
     std::ofstream out("found_keys.txt", std::ios::app);
-    out << priv_key << "," << pub_x_hex << "\n";
+    out << priv_key.get_str(10) << "," << pub_x_hex << "\n";
     out.close();
 }
 
 void process_forever() {
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
-    std::uniform_int_distribution<uint64_t> dis(1, UINT64_MAX);
+    gmp_randclass rng(gmp_randinit_default);
+    rng.seed(static_cast<unsigned long>(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+
+    const mpz_class max_key("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 0);
 
     while (true) {
-        for (int64_t i : pr_values) {
-            uint64_t r = dis(gen);
-            int64_t priv_signed = static_cast<int64_t>(r) - i;
-            if (priv_signed <= 0) continue;
-            uint64_t priv = static_cast<uint64_t>(priv_signed);
+        mpz_class r = rng.get_z_range(max_key);
+
+        for (const auto& delta : pr_values) {
+            mpz_class priv_key = r - delta;
+            if (priv_key <= 0 || priv_key >= max_key) continue;
 
             for (int offset = 0; offset < 4; ++offset) {
-                uint64_t k = priv + offset;
+                // mpz_class candidate = priv_key + offset;
+                mpz_class candidate = (priv_key + offset) % max_key;
+                if (candidate >= max_key) break;
+
                 uint8_t priv_bytes[32], pub_bytes[65];
-                int_to_32bytes(k, priv_bytes);
+                mpz_to_32bytes(candidate, priv_bytes);
+
                 if (scalar_mult(priv_bytes, pub_bytes)) {
                     std::string pub_x_hex;
                     char buf[3];
@@ -79,8 +85,8 @@ void process_forever() {
                     }
                     if (target_x_coords.count(pub_x_hex)) {
                         std::lock_guard<std::mutex> lock(print_mutex);
-                        std::cout << "\n[FOUND] Key: " << k << " X: " << pub_x_hex << "\n";
-                        log_found(k, pub_x_hex);
+                        std::cout << "\n[FOUND] Key: " << candidate.get_str(10) << " X: " << pub_x_hex << "\n";
+                        log_found(candidate, pub_x_hex);
                     }
                 }
 
@@ -97,14 +103,15 @@ void process_forever() {
 int main() {
     ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
 
-    std::ifstream pr_file("minuses.txt");
-    int64_t val;
-    while (pr_file >> val) pr_values.push_back(val);
-
     std::ifstream pub_file("uncompress.txt");
     std::string line;
     while (std::getline(pub_file, line)) {
         if (!line.empty()) target_x_coords.insert(line);
+    }
+
+    std::ifstream pr_file("minuses.txt");
+    while (std::getline(pr_file, line)) {
+        if (!line.empty()) pr_values.emplace_back(line);
     }
 
     int num_threads = std::thread::hardware_concurrency();

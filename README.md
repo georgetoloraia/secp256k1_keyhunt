@@ -18,12 +18,19 @@ This installs the static library and headers.
 ## ✅ Compilation Instructions
 ```bash
 g++ secp256k1_keyhunt.cpp -o keyhunt -lsecp256k1 -pthread
+
+or
+
+g++ secp256k1_keyhunt.cpp -lgmp -lgmpxx -lsecp256k1 -pthread -o keyhunt
+
 ```
 
 - If you installed `libsecp256k1` to `/usr/local`, add:
 ```bash
 g++ secp256k1_keyhunt.cpp -o keyhunt -I/usr/local/include -L/usr/local/lib -lsecp256k1 -pthread
 ```
+
+- `tail -f found_keys.txt` in another terminal to monitor for hits.
 
 ## ✅ Input Files Required
 - `minuses.txt` — list of offsets (integers)
