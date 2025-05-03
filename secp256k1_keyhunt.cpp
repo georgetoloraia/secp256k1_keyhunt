@@ -66,10 +66,12 @@ void process_forever() {
 
         for (const auto& delta : pr_values) {
             mpz_class priv_key = r - delta;
+            std::cout << priv_key << "\n";
             if (priv_key <= 0 || priv_key >= max_key) continue;
 
             for (int offset = 0; offset < 4; ++offset) {
                 mpz_class candidate = (priv_key + offset) % max_key;
+                // std::cout << candidate << "\n";
                 if (candidate == 0) continue; // skip invalid key
 
                 uint8_t priv_bytes[32], pub_bytes[65];
