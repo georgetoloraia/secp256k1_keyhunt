@@ -69,9 +69,8 @@ void process_forever() {
             if (priv_key <= 0 || priv_key >= max_key) continue;
 
             for (int offset = 0; offset < 4; ++offset) {
-                // mpz_class candidate = priv_key + offset;
                 mpz_class candidate = (priv_key + offset) % max_key;
-                if (candidate >= max_key) break;
+                if (candidate == 0) continue; // skip invalid key
 
                 uint8_t priv_bytes[32], pub_bytes[65];
                 mpz_to_32bytes(candidate, priv_bytes);
@@ -106,7 +105,12 @@ int main() {
     std::ifstream pub_file("uncompress.txt");
     std::string line;
     while (std::getline(pub_file, line)) {
-        if (!line.empty()) target_x_coords.insert(line);
+        if (!line.empty()) {
+            mpz_class pub_x(line); // decimal to hex
+            std::string hex = pub_x.get_str(16);
+            while (hex.length() < 64) hex = "0" + hex;
+            target_x_coords.insert(hex);
+        }
     }
 
     std::ifstream pr_file("minuses.txt");
